@@ -1,0 +1,94 @@
+#include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include "udp.h"
+#include "../util/type.h"
+#include "../util/util.h"
+#include <pthread.h>
+#include <ctype.h>    /* For tolower() function */
+#include <math.h>
+
+void diep(const char *s)
+{
+  perror(s);
+  exit(1);
+}
+
+int main(void)
+{
+  udp_struct udp;
+
+  int msglen;
+  float frontback = 0.0;
+  float leftright = 0.0;
+  float updown = 0.01;
+  float yawrotate = 0.0;
+  float step=0.01;
+  char buf[512];
+  
+  if(udpClient_Init(&udp,"192.168.1.1",9930)) diep("udpClient_Init");
+  
+  
+  while(1) { 
+   	
+    //handle user input
+	int c=tolower(util_getch());
+        // take off
+	if(c=='s') {
+		printf("\r Take off           ");
+		msglen=sprintf(buf, (char*)"s %f", updown);
+                if (udpClient_Send(&udp, buf, msglen)) diep("send");
+	}
+       	// land
+	if(c=='d') {
+		printf("\r Landing           ");
+		msglen=sprintf(buf, (char*)"d %f", updown);
+                if (udpClient_Send(&udp, buf, msglen)) diep("send");
+        }
+        // fly up
+	if(c=='q') {
+		if(updown>0) updown += step;
+	}
+        // fly down
+	if(c=='a') {
+		if(updown>step) updown -= step;
+	}
+        // fly front
+	if(c=='i') {
+		frontback = 0.1;
+	}
+        // fly back
+	if(c=='k') {
+		frontback = -0.1;
+	}
+    	// fly left
+	if(c=='j') {
+		leftright = 0.1;
+	}
+ 	// fly right
+	if(c=='l') {
+		leftright = -0.1;
+	}
+        // fly yaw counter clock wise
+	if(c=='u') {
+		yawrotate = 0.1;
+	}
+        // fly yaw counter clock wise
+	if(c=='o') {
+		yawrotate = -0.1;
+	}
+
+	msglen=sprintf(buf, (char*)" %.3f,%.3f,%.3f,%.3f. ", updown,frontback,leftright,yawrotate);
+        if (udpClient_Send(&udp, buf, msglen)) diep("send");
+        printf(" %.3f,%.3f,%.3f,%.3f \n", updown,frontback,leftright,yawrotate);
+	//yield to other threads
+	pthread_yield();
+  }
+  
+  printf("\nDone...\n");
+ 
+  
+  udpClient_Close(&udp);
+  return 0;
+}

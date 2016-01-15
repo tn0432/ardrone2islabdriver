@@ -1,0 +1,54 @@
+#include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include "udp.h"
+#include <pthread.h>
+void diep(const char *s)
+{
+  perror(s);
+  exit(1);
+}
+
+int main(void)
+{
+  udp_struct udp;
+
+  int msglen;
+  float frontback = 0.0;
+  float leftright = 0.0;
+  float updown = 0.0;
+  float yawrotate = 0.0;
+  char buf[512];
+  char * pch;
+  
+  if(udpServer_Init(&udp,9930,0)) diep("udpServer_Init");
+  while(1)
+  {
+	int cnt=0;
+   	do {
+      		msglen = udpServer_Receive(&udp, buf, 512);
+      		cnt++;
+    	} while(msglen<=0);
+ 	
+        pch = strtok (buf," ,");
+        int countpart = 0;
+  	while (countpart<=3)
+  	{
+    		
+                if (countpart == 0) updown = atof(pch);
+		if (countpart == 1) frontback = atof(pch);
+		if (countpart == 2) leftright = atof(pch);
+		if (countpart == 3) yawrotate = atof(pch);
+		countpart ++;
+    		pch = strtok (NULL, " ,");
+  	}
+	printf("thrust %f,roll %f,pitch %f,yaw %f\n", updown,frontback,leftright,yawrotate);
+  	//yield to other threads
+	pthread_yield();       
+       
+  }
+ 
+  udpClient_Close(&udp);
+  return 0;
+}

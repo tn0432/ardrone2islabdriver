@@ -1,0 +1,2 @@
+udpclientnavdataislab:
+	arm-none-linux-gnueabi-g++ -pthread -o udpclientnavdataislab udp.c $(CURDIR)/../gpio/gpio.c main_udpclient_navdata_islab.c $(CURDIR)/../navdata2/navdata_test3.c gpio_ardrone.c $(CURDIR)/../util/util.c

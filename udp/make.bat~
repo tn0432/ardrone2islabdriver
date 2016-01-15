@@ -1,0 +1,10 @@
+arm-none-linux-gnueabi-g++.exe -o ../bin/udpserver udp.c main_udpserver.c
+arm-none-linux-gnueabi-g++.exe -o ../bin/udpclient udp.c main_udpclient.c
+
+g++ -pthread -o udpclientislab udp.c ../gpio/gpio.c ../util/util.c main_udpclient_islab.c
+arm-none-linux-gnueabi-g++ -pthread -o udpserverislab udp.c main_udpserver_islab.c
+
+arm-none-linux-gnueabi-g++ -pthread -o udpclientnavdataislab udp.c ../gpio/gpio.c ../util/util.c main_udpclient_navdata_islab.c
+
+g++ -pthread -o udpservernavdataislab -I/opt/ros/fuerte/include -L/opt/ros/fuerte/lib -Wl,-rpath,/opt/ros/fuerte/lib -lroscpp -lrosconsole -lrostime udp.c main_udpserver_navdata_islab.c
+

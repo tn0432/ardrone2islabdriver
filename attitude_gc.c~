@@ -1,0 +1,23 @@
+#include "attitude_gc.h"
+
+void gc_attitude_Init(gc_attitude_struct *gc, float kR11, float kR22, float kR33, float kOmega11, float kOmega22, float kOmega33) 
+{
+	gc->kR11=kR11;
+	gc->kR22=kR22;
+	gc->kR33=kR33;
+	gc->kOmega11=kOmega11;
+	gc->kOmega22=kOmega22;
+	gc->kOmega33=kOmega33;
+}
+/*
+float* gc_attitude_Cal(gc_attitude_struct *gc, float eR1, float eR2, float eR3, float eOmega1, float eOmega2, float eOmega3)
+{
+	float* outputM[3];
+	outputM[1] = gc->kR11 * eR1 + gc->kOmega11 * eOmega1;
+ 	outputM[2] = gc->kR22 * eR2 + gc->kOmega22 * eOmega2;
+	outputM[3] = gc->kR33 * eR3 + gc->kOmega33 * eOmega3;
+	return outputM;
+}*/
+
+
+

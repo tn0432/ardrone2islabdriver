@@ -1,0 +1,375 @@
+/*
+    controlthread.c - AR.Drone control thread
+
+    Copyright (C) 2011 Hugo Perquin - http://blog.perquin.com
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+    MA 02110-1301 USA.
+*/
+
+
+#include <stdio.h>   /* Standard input/output definitions */
+#include <string.h>  /* String function definitions */
+#include <unistd.h>  /* UNIX standard function definitions */
+#include <fcntl.h>   /* File control definitions */
+#include <errno.h>   /* Error number definitions */
+#include <termios.h> /* POSIX terminal control definitions */
+#include <stdlib.h>  //exit()
+#include <pthread.h>
+#include <math.h>
+
+#include "util/type.h"
+#include "util/util.h"
+#include "motorboard/mot.h"
+#include "navdata_islab/navdata_islab.h"
+#include "udp/udp.h"
+#include "pid.h"
+#include "controlthread.h"
+
+
+float adj_roll;
+float adj_pitch;
+float adj_yaw;
+float adj_h;
+
+
+pthread_t ctl_thread;
+
+pid_struct pid_roll;
+pid_struct pid_pitch;
+pid_struct pid_yaw;
+pid_struct pid_h;
+
+
+float throttle;
+
+struct att_struct ahrsdata;
+
+struct setpoint_struct {
+  float pitch;     //radians  
+  float roll;      //radians     
+  float yaw;     //yaw in radians   
+  float h;         //cm
+  float pitch_roll_max; //radians     
+  float h_max; //cm
+  float h_min; //cm
+  float throttle_hover; //hover throttle setting
+  float throttle_min; //min throttle (while flying)
+  float throttle_max; //max throttle (while flying)
+} setpoint;
+
+udp_struct udpNavLog;
+int logcnt=0;
+void navLog_Send();
+void *ctl_thread_main(void* data);
+
+int ctl_Init(char *client_addr) 
+{
+	int rc;
+       
+	//----- Initialize PID controller -----//
+	//defaults from AR.Drone app:  pitch,roll max=12deg; yawspeed max=100deg/sec; height limit=on; vertical speed max=700mm/sec; 
+	setpoint.pitch_roll_max=DEG2RAD(10); //degrees     
+  	//setpoint.yawsp_max=DEG2RAD(100); //degrees/sec
+  	setpoint.h_max=600; //cm
+  	setpoint.h_min=40; //cm40
+           
+
+  	setpoint.throttle_hover=0.1;//0.66
+  	setpoint.throttle_min=0.05;//0.5
+  	setpoint.throttle_max=0.95; //0.85
+  			
+	//init pid pitch/roll //Kp, Ki, Kd, imax
+	pid_Init(&pid_roll,  0.35,0.0,0.25,1);
+	pid_Init(&pid_pitch, 0.35,0.0,0.25,1);
+	pid_Init(&pid_yaw,   1.00,0,0.01,0);
+	pid_Init(&pid_h,     0.0005,0,0,0);
+
+  	throttle=0.000;
+
+	//----- Initilize GC Controller -----//
+
+
+	//----- Initialize Attitude -----// 
+  	printf("Initialize Attitude.. \n");
+	//rc = att_Init(&att);
+	//if(rc) return rc;
+	if(navdata_init()) printf("navdata initialized\n");
+	navdata_flattrim(&ahrsdata);
+	//printf("bias_after:%f\t%f\t%f\n",gyros_offset[0],gyros_offset[1],gyros_offset[2]);
+        sleep(1);
+
+
+	//----- Initialize UDP -----//
+  	// Udp logger
+  	printf("client\n");
+  	udpClient_Init(&udpNavLog, "192.168.43.176", 9930);
+	//udpClient_Init(&udpNavLog, "192.168.1.4", 9930);
+  	//navLog_Send();
+  	printf("udpClient_Init\n", rc);
+  
+	// Start motor thread
+	printf("Initialize motor\n");
+	rc = mot_Init();
+	if(rc) return rc;
+  
+	// Start ctl thread
+	printf("Initialize ctl_thread_main\n"); 
+	rc = pthread_create(&ctl_thread, NULL, ctl_thread_main, NULL); 
+	if(rc) {
+		printf("ctl_Init: Return code from pthread_create(mot_thread) is %d\n", rc);
+		return 202;
+	}
+	else printf("rc = %d\n", rc);
+
+
+}
+
+void *ctl_thread_main(void* data)
+{
+	int cnt;
+	int rc;
+	printf("run pthread");
+	navdata_update(&ahrsdata); //get data from thread	
+    
+	while(1) {
+		//get sample
+		navdata_update(&ahrsdata); //get data from thread
+		
+	/*
+			printf("ax:%.2f|",ahrsdata.ax);
+			printf("ay:%.2f|",ahrsdata.ay);
+			printf("az:%.2f|",ahrsdata.az);
+			printf("wx:%.2f|",ahrsdata.wx);
+			printf("wy:%.2f|",ahrsdata.wy);
+			printf("wz:%.2f|",ahrsdata.wz);
+			printf("roll_a:%.1f|",RAD2DEG(ahrsdata.roll_a));
+			printf("pithc_a:%.1f|",RAD2DEG(ahrsdata.pitch_a));
+			printf("roll_g:%.1f|",RAD2DEG(ahrsdata.roll_w));
+			printf("pithc_g:%.1f|",RAD2DEG(ahrsdata.pitch_w));
+			printf("yaw_g:%.1f|",RAD2DEG(ahrsdata.yaw_w));
+			printf("roll:%.1f|",RAD2DEG(ahrsdata.roll));
+			printf("pithc:%.1f|",RAD2DEG(ahrsdata.pitch));
+			printf("yaw:%.1f|",RAD2DEG(ahrsdata.yaw));
+			printf("dt2:%.6f|",ahrsdata.dt2);
+			printf("dt:%.3f\n",ahrsdata.dt);*/		
+    float motor[4]; 
+   
+    // Test function
+    //float* check;
+    //check = gc_Cal(&gc_attitude, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1);
+    //printf("check = [%.2f,%.2f,%.2f]",check[1],check[2],check[3]);
+    //
+    double input[24];
+
+    double output[7] = {1,2,3,4,5,6,7}; 
+    //C_code_geometric_controller_1(input,output);
+    //printf("check = [%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f]",output[1],output[2],output[3],output[4],output[5],output[6],output[7]);
+
+    if(setpoint.throttle_hover<=0.02) {
+      setpoint.throttle_hover = setpoint.throttle_hover + setpoint.h;
+      setpoint.h = 0;
+      //motors off
+      adj_roll = 0;
+      adj_pitch = 0;
+      adj_h = 0;
+      adj_yaw = 0;
+      throttle = 0;
+      //mot_Run(0.025,0.025,0.025,0.025);
+    }else{     
+      //flying, calc pid controller corrections
+      //printf("errorpitch = %.5f, ", setpoint.pitch-ahrsdata.pitch);
+      //printf("errorpitchrate = %.5f, ", ahrsdata.wy+ahrsdata.b_est[1]);
+      //adj_roll  = pid_CalcD(&pid_roll,  setpoint.roll   - ahrsdata.roll,  ahrsdata.dt, ahrsdata.wx+ahrsdata.b_est[0]); //err positive = need to roll right
+      adj_roll  = pid_Calc(&pid_roll,  setpoint.roll   - ahrsdata.roll,  ahrsdata.dt);
+      //adj_pitch = pid_CalcD(&pid_pitch, setpoint.pitch  - ahrsdata.pitch, ahrsdata.dt, ahrsdata.wy+ahrsdata.b_est[1]); //err positive = need to pitch down
+      adj_pitch = pid_Calc(&pid_pitch, setpoint.pitch  - ahrsdata.pitch, ahrsdata.dt);
+      adj_yaw   = pid_CalcD(&pid_yaw,   setpoint.yaw    - ahrsdata.yaw,   ahrsdata.dt, ahrsdata.wz+ahrsdata.b_est[2]); //err positive = need to increase yaw to the left
+      //adj_h     = pid_CalcD(&pid_h,     setpoint.h      - ahrsdata.hraw,     ahrsdata.dt, 0); //err positive = need to increase height
+      //need check height velocity hv
+      setpoint.throttle_hover = setpoint.throttle_hover + setpoint.h;
+      setpoint.h = 0;
+      throttle = setpoint.throttle_hover;
+      //throttle = setpoint.h + adj_h;
+      //throttle = setpoint.h;
+      if(throttle < setpoint.throttle_min) throttle = setpoint.throttle_min;
+      if(throttle > setpoint.throttle_max) throttle = setpoint.throttle_max;      
+    }
+    
+    //convert pid adjustments to motor values
+    /*
+    motor[0] = throttle -adj_pitch;
+    motor[1] = throttle -adj_pitch;
+    motor[2] = throttle +adj_pitch;
+    motor[3] = throttle +adj_pitch;
+    */
+    /*
+    motor[0] = throttle +adj_roll -adj_pitch;
+    motor[1] = throttle -adj_roll -adj_pitch;
+    motor[2] = throttle -adj_roll +adj_pitch;
+    motor[3] = throttle +adj_roll +adj_pitch;
+    */
+    
+    motor[0] = throttle +adj_roll -adj_pitch +adj_yaw;
+    motor[1] = throttle -adj_roll -adj_pitch -adj_yaw;
+    motor[2] = throttle -adj_roll +adj_pitch +adj_yaw;
+    motor[3] = throttle +adj_roll +adj_pitch -adj_yaw;
+    
+    /*
+    motor[0] = 0; 
+    motor[1] = 0;
+    motor[2] = 0;
+    motor[3] = 0;*/
+	
+    float motor_min = 0.125;
+    if(motor[0] < motor_min) motor[0] = motor_min;
+    if(motor[1] < motor_min) motor[1] = motor_min;
+    if(motor[2] < motor_min) motor[2] = motor_min;
+    if(motor[3] < motor_min) motor[3] = motor_min;
+
+    ahrsdata.motor1 = motor[0];
+    ahrsdata.motor2 = motor[1];
+    ahrsdata.motor3 = motor[2];
+    ahrsdata.motor4 = motor[3];
+	
+    printf("motor: %.5f,%.5f,%.5f,%.5f\n",motor[0],motor[1],motor[2],motor[3]);
+    printf("throttle = %.5f, adj_roll = %0.5f, adj_pitch = %0.5f, adj_yaw = %0.5f \n", throttle,adj_roll,adj_pitch,adj_yaw);
+    //printf("throttle = %.5f, adj_roll = %0.5f, adj_pitch = %0.5f, motor: %.5f,%.5f,%.5f,%.5f \n", throttle,adj_roll,adj_pitch,motor[0],motor[1],motor[2],motor[3]);
+    //send to motors
+    //mot_Run(motor[0],motor[1],motor[2],motor[3]);
+        
+    //blink leds    
+    cnt++;
+    if((cnt%200)==0) 
+      mot_SetLeds(MOT_LEDGREEN,MOT_LEDGREEN,MOT_LEDGREEN,MOT_LEDGREEN);
+    else if((cnt%200)==100) 
+      mot_SetLeds(0,0,0,0);
+        
+    //send UDP nav log packet    
+    navLog_Send();
+  
+		//yield to other threads
+		pthread_yield();
+	}
+}
+
+
+//logging
+void navLog_Send()
+{
+  char logbuf[512];
+  int logbuflen;
+
+  float motval[4];
+	mot_GetMot(motval);
+  
+  logcnt++;//38
+  logbuflen=sprintf(logbuf,(char*)" %.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f "
+    //sequence+timestamp
+    ,ahrsdata.tm   // navdata timestamp in sec
+    ,ahrsdata.tm_pre   
+    ,ahrsdata.frame
+
+    ,ahrsdata.pitch_w  //=sum(gx * dt)
+    ,ahrsdata.pitch_a  //=pitch(az,ax)
+    ,ahrsdata.pitch    //kalman pitch estimate from gy and pitch_a
+
+    //roll estimates in radians, positive is roll right (fly rightward)
+    ,ahrsdata.roll_w   //=sum(gy * dt)
+    ,ahrsdata.roll_a   //=roll(az,ay)
+    ,ahrsdata.roll     //kalman roll estimate from gx and roll_a
+  
+    //yaw estimate, positive is yaw left
+    ,ahrsdata.yaw_w      //=sum(gz * dt)
+    ,ahrsdata.yaw_m      //=sum(gz * dt)
+    ,ahrsdata.yaw      //=sum(gz * dt)
+
+    ,ahrsdata.dt  // time since last navdata sample in sec
+    ,ahrsdata.dt2 // time consumed by the ahrs calculations
+    ,ahrsdata.q_est[0]
+    ,ahrsdata.q_est[1]
+    ,ahrsdata.q_est[2]
+    ,ahrsdata.q_est[3]
+    ,ahrsdata.b_est[0]
+    ,ahrsdata.b_est[1]
+    ,ahrsdata.b_est[2]
+  
+    //copy of physical navdata values
+    ,ahrsdata.ts  // navdata timestamp in sec
+    ,ahrsdata.hraw    // height above ground in [cm] 
+    ,ahrsdata.h_meas// 1=height was measured in this sample, 0=height is copy of prev value
+
+    ,ahrsdata.ax   // acceleration x-axis in [G] front facing up is positive         
+    ,ahrsdata.ay   // acceleration y-axis in [G] left facing up is positive                
+    ,ahrsdata.az   // acceleration z-axis in [G] top facing up is positive            
+    ,ahrsdata.wx   // gyro value x-axis in [rad/sec] right turn, i.e. roll right is positive           
+    ,ahrsdata.wy   // gyro value y-axis in [rad/sec] right turn, i.e. pirch down is positive                     
+    ,ahrsdata.wz   // gyro value z-axis in [rad/sec] right turn, i.e. yaw left is positive
+    ,ahrsdata.magX
+    ,ahrsdata.magY 
+    ,ahrsdata.magZ
+    ,ahrsdata.pressure
+    ,ahrsdata.rotX
+    ,ahrsdata.rotY
+    ,ahrsdata.rotZ
+    ,ahrsdata.altd
+    ,ahrsdata.motor1
+    ,ahrsdata.motor2
+    ,ahrsdata.motor3
+    ,ahrsdata.motor4
+  );    
+  udpClient_Send(&udpNavLog,logbuf,logbuflen); 
+}
+
+/*
+int ctl_FlatTrim()
+{
+  return att_FlatTrim(&att);
+}
+*/
+void ctl_SetSetpoint(float pitch, float roll, float yaw, float h)
+{
+  if(pitch > setpoint.pitch_roll_max) pitch = setpoint.pitch_roll_max;
+  if(pitch < -setpoint.pitch_roll_max) pitch = -setpoint.pitch_roll_max;
+  setpoint.pitch=pitch;
+  if(roll > setpoint.pitch_roll_max) roll = setpoint.pitch_roll_max;
+  if(roll < -setpoint.pitch_roll_max) roll = -setpoint.pitch_roll_max;
+  setpoint.roll=roll;
+  //if(yaw > setpoint.yawsp_max) yaw = setpoint.yawsp_max;
+  //if(yaw < -setpoint.yawsp_max) yaw = -setpoint.yawsp_max;
+  setpoint.yaw=yaw;
+  //if(h > setpoint.h_max) h = setpoint.h_max;
+  //if(h <= 0) h = 0;
+  //if(h>0 && h < setpoint.h_min) h = setpoint.h_min;
+  //if(setpoint.h==0 && h>0) throttle=0.69; //takeoff
+  setpoint.h = h;
+}
+
+void ctl_SetSetpointDiff(float pitch, float roll, float yaw, float h)
+{
+  ctl_SetSetpoint(pitch+setpoint.pitch, setpoint.pitch+pitch, yaw+setpoint.yaw, h+setpoint.h);
+}
+/*
+void ctl_Close()
+{
+  mot_Close();
+  att_Close();
+}
+*/
+void ctl_SetGas(float gas1)
+{
+	throttle+=gas1;
+}
+
